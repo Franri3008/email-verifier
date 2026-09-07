@@ -145,18 +145,25 @@ async def run_once():
     return True
 
 
-async def main():
-    setup_logging()
-    cipher()  # Fail at startup if encryption is misconfigured.
-    initialize()
+async def loop():
+    """Poll for work forever. Hosted by the web app, or run standalone via main()."""
     while True:
         try:
             worked = await run_once()
             if not worked:
                 await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.error("Worker database operation failed; retrying in five seconds.")
             await asyncio.sleep(5)
+
+
+async def main():
+    setup_logging()
+    cipher()  # Fail at startup if encryption is misconfigured.
+    initialize()
+    await loop()
 
 
 if __name__ == "__main__":

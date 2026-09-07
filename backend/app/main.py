@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,8 +13,9 @@ from app.exceptions.handlers import register_exception_handlers
 from app.routes.api import router
 from app.routes.accounts import router as accounts_router
 from app.core.database import initialize
-from app.core.security import cipher
+from app.core.security import bootstrap_admin, cipher
 from app.core.middleware import RequestProtection
+from app.worker import loop as worker_loop
 
 
 settings = get_settings()
@@ -34,7 +37,18 @@ async def lifespan(_: FastAPI):
         ):
             raise RuntimeError("Production requires PostgreSQL.")
     initialize()
-    yield
+    bootstrap_admin()
+    if not settings.run_worker:
+        yield
+        return
+    # One service hosts both roles, so idle deployments can scale to zero.
+    worker = asyncio.create_task(worker_loop())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        logging.getLogger(__name__).info("Worker stopped.")
 
 
 app = FastAPI(

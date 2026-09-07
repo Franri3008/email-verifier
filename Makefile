@@ -6,10 +6,7 @@ install:
 	cd frontend && $(MAKE) install
 
 run:
-	$(MAKE) -j3 run-backend run-frontend run-worker
-
-run-worker:
-	cd backend && ../.venv/bin/python -m app.worker
+	$(MAKE) -j2 run-backend run-frontend
 
 setup:
 	.venv/bin/python scripts/setup_local.py

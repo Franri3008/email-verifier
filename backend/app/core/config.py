@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     max_jobs_per_hour: int = 30
     job_timeout_seconds: int = 1800
     static_dir: str = ""
+    run_worker: bool = True
+    initial_admin_email: str | None = None
+    initial_admin_password: str | None = None
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     openrouter_api_key: str | None = None

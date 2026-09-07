@@ -1,0 +1,30 @@
+# One free web service hosts the API, the static frontend, and the job worker,
+# so an idle deployment sleeps and costs nothing. The database is external
+# because free instances have no persistent disk.
+services:
+  - type: web
+    name: email-checker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: PRODUCTION
+        value: "true"
+      - key: SECURE_COOKIES
+        value: "true"
+      - key: RETENTION_HOURS
+        value: "24"
+      # Set these in the Render dashboard; never commit their values.
+      - key: DATABASE_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: INITIAL_ADMIN_EMAIL
+        sync: false
+      - key: INITIAL_ADMIN_PASSWORD
+        sync: false

@@ -15,19 +15,12 @@ services:
   web:
     build: .
     ports: ["8000:8000"]
-    environment: &app_environment
+    environment:
       DATABASE_URL: postgresql://email_checker:${LOCAL_DATABASE_PASSWORD}@postgres:5432/email_checker
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Generate ENCRYPTION_KEY first}
       PUBLIC_URL: http://localhost:8000
       ALLOWED_ORIGINS: http://localhost:8000
       SECURE_COOKIES: "false"
-    depends_on:
-      postgres:
-        condition: service_healthy
-  worker:
-    build: .
-    command: ["python", "-m", "app.worker"]
-    environment: *app_environment
     depends_on:
       postgres:
         condition: service_healthy

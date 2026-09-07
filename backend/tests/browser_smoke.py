@@ -7,7 +7,6 @@ development localhost:8000 value fails every request here with a CORS error.
 Uses system Chrome; no provider credits are spent.
 """
 
-import asyncio
 import base64
 import os
 from pathlib import Path
@@ -30,9 +29,6 @@ def serve():
     from app.models.schemas.verification import Candidate, VerificationResult
     from app.services.openrouter_service import OpenRouterService
     from app.services.verifalia_service import VerifaliaService
-    from app.worker import run_once
-    from contextlib import asynccontextmanager
-
     initialize()
     with session() as db, db.begin():
         db.add(
@@ -65,24 +61,6 @@ def serve():
 
     OpenRouterService.find_candidates = lookup
     VerifaliaService.verify_many = verify
-    original = app.router.lifespan_context
-
-    async def work():
-        while True:
-            await run_once()
-            await asyncio.sleep(0.2)
-
-    @asynccontextmanager
-    async def lifespan(application):
-        async with original(application):
-            worker = asyncio.create_task(work())
-            try:
-                yield
-            finally:
-                worker.cancel()
-                await asyncio.gather(worker, return_exceptions=True)
-
-    app.router.lifespan_context = lifespan
     uvicorn.run(app, host="127.0.0.1", port=8769, log_level="error")
 
 

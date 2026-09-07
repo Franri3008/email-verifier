@@ -15,6 +15,8 @@ os.environ["PRODUCTION"] = "false"
 os.environ["SECURE_COOKIES"] = "false"
 os.environ["PUBLIC_URL"] = "http://localhost:3000"
 os.environ["ALLOWED_ORIGINS"] = "http://localhost:3000,http://127.0.0.1:3000"
+# Tests claim and run jobs explicitly; a live in-process worker would race them.
+os.environ["RUN_WORKER"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

@@ -1,13 +1,14 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
 
 from cryptography.fernet import Fernet
 from fastapi import HTTPException, Request
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.core.database import session
@@ -82,6 +83,30 @@ def set_session(db, response, user):
         samesite="strict",
         path="/",
     )
+
+
+def bootstrap_admin():
+    """Create the first administrator from the environment.
+
+    Hosts without shell access cannot run `python -m app.manage admin`, so the
+    account is seeded at startup instead. It never overwrites an existing user,
+    so leaving the variables set is harmless.
+    """
+    settings = get_settings()
+    email = (settings.initial_admin_email or "").strip().lower()
+    password = settings.initial_admin_password or ""
+    if not email and not password:
+        return
+    if "@" not in email or not 12 <= len(password) <= 128:
+        raise RuntimeError(
+            "INITIAL_ADMIN_EMAIL must be an email address and "
+            "INITIAL_ADMIN_PASSWORD must be 12-128 characters."
+        )
+    with session() as db, db.begin():
+        if db.scalar(select(User).where(User.email == email)):
+            return
+        db.add(User(email=email, password=password_hash(password), admin=True))
+    logging.getLogger(__name__).info("Seeded the initial administrator account.")
 
 
 def rate_limit(key, limit=10, seconds=900):
