@@ -25,6 +25,8 @@ export type VerificationResult = {
   candidate_confidence: string | null;
   candidate_source_url: string | null;
   candidate_rationale: string | null;
+  verdict?: string | null;
+  verdict_reason?: string | null;
 };
 
 export type SimpleResponse = {
@@ -46,6 +48,9 @@ export type BatchResponse = {
     generated_candidates: number;
     counts: Record<string, number>;
   };
+  outcome?: "complete" | "partial";
+  message?: string;
+  unprocessed_rows?: number[];
 };
 
 export type Usage = {

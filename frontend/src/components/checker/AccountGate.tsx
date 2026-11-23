@@ -132,7 +132,7 @@ export function AccountGate({ children }: { children: ReactNode }) {
         </div>)}
       </>}
       {panel === "jobs" && <>
-        <p>Jobs continue when you close this page. Results expire after 24 hours.</p>
+        <p>Jobs continue after closing this page (results expire after 24 hours)</p>
         {jobs.length === 0 && <p>No jobs yet.</p>}
         {jobs.map((job) => <div className="account-row" key={job.id}><span>{job.filename || "Single check"}<small>{new Date(job.created * 1000).toLocaleString()} · {job.status}</small></span>
           <button onClick={() => void action(async () => setSelected(await jsonFetch<Job>(`/api/jobs/${job.id}`)))}>View</button>

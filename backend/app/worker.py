@@ -14,6 +14,7 @@ from app.models.persistence import Invite, Job, LoginSession, RateBucket
 from app.repositories.batch_repository import BatchRepository
 from app.services.batch_service import BatchService
 from app.services.check_service import CheckService
+from app.services.evidence_service import EvidenceService
 from app.services.openrouter_service import OpenRouterService
 from app.services.verifalia_service import VerifaliaService
 from app.models.schemas.verification import ModelId, Quality
@@ -34,6 +35,7 @@ def cleanup():
                 status="interrupted",
                 payload=None,
                 upload=None,
+                result=None,
                 error="Worker was interrupted. Provider credits may already have been used. Review before starting a new job.",
             )
         )
@@ -75,16 +77,17 @@ async def execute(job):
     settings = user_settings(job.user_id)
     lookup = OpenRouterService(settings)
     verifier = VerifaliaService(settings)
+    evidence = EvidenceService(settings)
     model, quality = ModelId(values["model"]), Quality(values["quality"])
     download = None
     if job.kind == "simple":
-        result = await CheckService(lookup, verifier).check(
+        result = await CheckService(lookup, verifier, evidence).check(
             values["query"], values["context"], model, quality
         )
         result = result.model_dump(mode="json")
     else:
         repository = BatchRepository(3600)
-        service = BatchService(settings, repository, lookup, verifier)
+        service = BatchService(settings, repository, lookup, verifier, evidence)
         result = await service.process(
             cipher().decrypt(job.upload),
             job.filename,
@@ -92,10 +95,12 @@ async def execute(job):
             quality,
             values["generate_missing"],
             values["context"],
+            on_progress=lambda state: save_progress(job.id, state),
         )
         _, download = service.download(result.batch_id)
         result.batch_id = job.id
         result = result.model_dump(mode="json")
+        result.update(outcome="complete", message="", unprocessed_rows=[])
     # Recheck revocation before publishing private results.
     user_settings(job.user_id)
     with session() as db, db.begin():
@@ -113,6 +118,53 @@ async def execute(job):
         )
 
 
+def save_progress(job_id, state):
+    with session() as db, db.begin():
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id, Job.status == "running")
+            .values(result=seal(state), updated=time.time())
+        )
+
+
+def salvage(job, timed_out):
+    if job.kind != "batch" or not job.upload:
+        return None
+    with session() as db:
+        stored = db.scalar(select(Job.result).where(Job.id == job.id))
+    checkpoint = unseal(stored) if stored else None
+    if not BatchService.has_progress(checkpoint):
+        return None
+    values = unseal(job.payload)
+    service = BatchService(
+        user_settings(job.user_id), BatchRepository(3600), None, None
+    )
+    result, unprocessed = service.partial(
+        cipher().decrypt(job.upload),
+        job.filename,
+        values["generate_missing"],
+        checkpoint,
+    )
+    _, download = service.download(result.batch_id)
+    reason = (
+        "The job hit its time limit"
+        if timed_out
+        else "A provider error stopped the job"
+    )
+    message = f"{reason} before every row was processed."
+    if unprocessed:
+        message += (
+            f" {len(unprocessed)} rows were not processed (file rows "
+            f"{BatchService.describe_rows(unprocessed)}). They are marked Not processed. "
+            "Upload the downloaded file again to process only those rows."
+        )
+    message += " Provider credits may have been used."
+    result.batch_id = job.id
+    result = result.model_dump(mode="json")
+    result.update(outcome="partial", message=message, unprocessed_rows=unprocessed)
+    return result, download, message
+
+
 async def run_once():
     cleanup()
     job = claim()
@@ -125,15 +177,34 @@ async def run_once():
         # Never store/log raw provider responses or secrets.
         logger.warning("Job %s failed (%s)", job.id, type(exc).__name__)
         message = "The job failed. Check credentials and provider balances before starting another job; credits may have been used."
-        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        timed_out = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+        if timed_out:
             message = "Job exceeded its time limit. Provider credits may have been used; check before retrying."
+        try:
+            saved = salvage(job, timed_out)
+        except Exception as salvage_exc:
+            logger.warning(
+                "Job %s partial results failed (%s)",
+                job.id,
+                type(salvage_exc).__name__,
+            )
+            saved = None
+        if saved is None:
+            changes = dict(status="failed", error=message, result=None)
+        else:
+            result, download, message = saved
+            changes = dict(
+                status="completed",
+                error=message,
+                result=seal(result),
+                download=cipher().encrypt(download),
+            )
         with session() as db, db.begin():
             db.execute(
                 update(Job)
                 .where(Job.id == job.id, Job.status == "running")
                 .values(
-                    status="failed",
-                    error=message,
+                    **changes,
                     upload=None,
                     payload=None,
                     updated=time.time(),

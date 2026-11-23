@@ -22,6 +22,8 @@ class Candidate(BaseModel):
     confidence: str = "unknown"
     source_url: str | None = None
     rationale: str | None = None
+    verdict: str | None = None
+    verdict_reason: str | None = None
 
 
 class VerificationResult(BaseModel):
@@ -37,6 +39,8 @@ class VerificationResult(BaseModel):
     candidate_confidence: str | None = None
     candidate_source_url: str | None = None
     candidate_rationale: str | None = None
+    verdict: str | None = None
+    verdict_reason: str | None = None
 
 
 class SimpleCheckRequest(BaseModel):

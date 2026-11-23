@@ -9,6 +9,7 @@ import httpx
 from app.core.config import Settings
 from app.exceptions.handlers import ServiceError
 from app.models.schemas.verification import Candidate, ModelId
+from app.services.retry import send_paid
 
 
 logger = logging.getLogger(__name__)
@@ -120,12 +121,18 @@ class OpenRouterService:
         }
         try:
             async with httpx.AsyncClient(
-                timeout=self._settings.request_timeout_seconds
+                timeout=httpx.Timeout(
+                    self._settings.request_timeout_seconds,
+                    read=self._settings.openrouter_search_timeout_seconds,
+                )
             ) as client:
-                response = await client.post(
-                    f"{self._settings.openrouter_base_url}/chat/completions",
-                    headers=headers,
-                    json=body,
+                response = await send_paid(
+                    lambda: client.post(
+                        f"{self._settings.openrouter_base_url}/chat/completions",
+                        headers=headers,
+                        json=body,
+                    ),
+                    "OpenRouter",
                 )
                 response.raise_for_status()
                 payload = response.json()

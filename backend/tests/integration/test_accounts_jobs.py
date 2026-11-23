@@ -1,8 +1,12 @@
 import asyncio
+import io
 import time
 from urllib.parse import parse_qs, urlparse
 
+import pandas as pd
 from fastapi.testclient import TestClient
+
+from app.core.config import get_settings
 
 from app.core.database import session
 from app.core.security import cipher, digest, seal, user_settings
@@ -322,3 +326,102 @@ def test_provider_failure_does_not_leak_secrets_or_retry(signed_in, monkeypatch)
     assert response.json()["status"] == "failed"
     assert "sensitive-provider-response" not in response.text
     assert asyncio.run(run_once()) is False
+
+
+def queue_name_batch(signed_in, monkeypatch, lookup, count=12):
+    signed_in.put(
+        "/api/credentials",
+        json={
+            "openrouter_api_key": "user-key",
+            "verifalia_username": "u",
+            "verifalia_password": "p",
+        },
+    )
+
+    async def verify(self, emails, quality):
+        return {
+            email: VerificationResult(
+                email=email,
+                result="Exists",
+                classification="Deliverable",
+                status="Success",
+            )
+            for email in emails
+        }
+
+    monkeypatch.setattr(OpenRouterService, "find_candidates", lookup)
+    monkeypatch.setattr(VerifaliaService, "verify_many", verify)
+    source = io.BytesIO()
+    pd.DataFrame({"name": [f"P{i}" for i in range(count)]}).to_excel(
+        source, index=False
+    )
+    queued = signed_in.post(
+        "/api/batch",
+        files={"file": ("people.xlsx", source.getvalue())},
+        data={"model": "anthropic/claude-opus-5.5", "generate_missing": "true"},
+    )
+    assert queued.status_code == 202
+    return queued.json()["id"]
+
+
+def test_failed_batch_keeps_finished_rows_as_partial_result(signed_in, monkeypatch):
+    calls = []
+
+    async def lookup(self, names, model, context):
+        calls.append(names)
+        if len(calls) > 1:
+            raise RuntimeError("sensitive-provider-response")
+        return {row_id: [Candidate(email=f"{n}@example.org")] for row_id, n in names}
+
+    job_id = queue_name_batch(signed_in, monkeypatch, lookup)
+    assert asyncio.run(run_once()) is True
+    job = signed_in.get("/api/jobs/" + job_id)
+    body = job.json()
+    assert body["status"] == "completed"
+    assert body["result"]["outcome"] == "partial"
+    assert body["result"]["unprocessed_rows"] == [12, 13]
+    assert "file rows 12-13" in body["error"]
+    assert "credits may have been used" in body["error"]
+    assert "sensitive-provider-response" not in job.text
+    download = signed_in.get(f"/api/batch/{job_id}/download")
+    assert download.status_code == 200
+    output = pd.read_excel(io.BytesIO(download.content))
+    assert output["result"].tolist().count("Exists") == 10
+    assert output["result"].tolist().count("Not processed") == 2
+    with session() as db:
+        stored = db.get(Job, job_id)
+        assert stored.upload is None and stored.payload is None
+
+
+def test_batch_timeout_returns_partial_result(signed_in, monkeypatch):
+    calls = []
+
+    async def lookup(self, names, model, context):
+        calls.append(names)
+        if len(calls) > 1:
+            await asyncio.sleep(5)
+        return {row_id: [] for row_id, _ in names}
+
+    monkeypatch.setattr(get_settings(), "job_timeout_seconds", 1)
+    job_id = queue_name_batch(signed_in, monkeypatch, lookup)
+    assert asyncio.run(run_once()) is True
+    body = signed_in.get("/api/jobs/" + job_id).json()
+    assert body["status"] == "completed"
+    assert body["result"]["outcome"] == "partial"
+    assert body["error"].startswith("The job hit its time limit")
+    assert body["result"]["summary"]["counts"] == {
+        "No email found": 10,
+        "Not processed": 2,
+    }
+
+
+def test_batch_failure_without_progress_still_fails(signed_in, monkeypatch):
+    async def lookup(self, names, model, context):
+        raise RuntimeError("down")
+
+    job_id = queue_name_batch(signed_in, monkeypatch, lookup)
+    assert asyncio.run(run_once()) is True
+    body = signed_in.get("/api/jobs/" + job_id).json()
+    assert body["status"] == "failed"
+    assert body["result"] is None
+    assert signed_in.get(f"/api/batch/{job_id}/download").status_code == 409

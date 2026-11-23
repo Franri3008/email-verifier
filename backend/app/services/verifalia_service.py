@@ -9,6 +9,7 @@ import httpx
 from app.core.config import Settings
 from app.exceptions.handlers import ServiceError
 from app.models.schemas.verification import Quality, VerificationResult
+from app.services.retry import send_free, send_paid
 
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,13 @@ class VerifaliaService:
             "name": "Email check",
         }
         try:
-            response = await client.post(
-                f"{self._settings.verifalia_base_url}/email-validations",
-                params={"waitTime": 30_000},
-                json=body,
+            response = await send_paid(
+                lambda: client.post(
+                    f"{self._settings.verifalia_base_url}/email-validations",
+                    params={"waitTime": 30_000},
+                    json=body,
+                ),
+                "Verifalia",
             )
             response.raise_for_status()
             snapshot = response.json()
@@ -105,7 +109,10 @@ class VerifaliaService:
                     or urlparse(job_url).scheme != "https"
                 ):
                     raise ServiceError("Verifalia returned an unexpected job location.")
-                response = await client.get(job_url, params={"waitTime": 30_000})
+                response = await send_free(
+                    lambda: client.get(job_url, params={"waitTime": 30_000}),
+                    "Verifalia",
+                )
                 response.raise_for_status()
                 snapshot = response.json()
                 if response.status_code == 202:

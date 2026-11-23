@@ -21,6 +21,7 @@ export function ResultCard({ result }: { result: VerificationResult }) {
   const tone = toneOf(result.classification);
   const Icon = tone === "unknown" ? QuestionIcon : TONES[tone];
   const [copied, setCopied] = useState(false);
+  const verdict = result.verdict?.toLowerCase();
 
   const copy = () => {
     // ponytail: clipboard needs a secure context, so tell the user when it is unavailable.
@@ -34,7 +35,7 @@ export function ResultCard({ result }: { result: VerificationResult }) {
   };
 
   return (
-    <article className="result-card">
+    <article className={`result-card ${verdict === "rejected" ? "rejected" : ""}`}>
       <span className={`status-tab ${tone}`}>{result.result}</span>
       <div className={`result-mark ${tone}`}>
         <Icon size={19} />
@@ -47,6 +48,12 @@ export function ResultCard({ result }: { result: VerificationResult }) {
             {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
           </button>
         </p>
+        {result.verdict && (
+          <p className="verdict-line">
+            <span className={`verdict-label ${verdict}`}>{result.verdict}</span>
+            {result.verdict_reason && <span className="verdict-reason">{result.verdict_reason}</span>}
+          </p>
+        )}
         <p className="result-detail">{result.status.replace(/([a-z])([A-Z])/g, "$1 $2")}</p>
 
         <div className="result-meta">

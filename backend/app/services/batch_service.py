@@ -2,7 +2,9 @@ import io
 import math
 import re
 from collections import Counter
+from collections.abc import Callable
 from copy import copy
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from zipfile import ZipFile, BadZipFile
@@ -20,6 +22,7 @@ from app.models.schemas.verification import (
     VerificationResult,
 )
 from app.repositories.batch_repository import BatchRepository
+from app.services.evidence_service import REJECTED, EvidenceService
 from app.services.openrouter_service import OpenRouterService
 from app.services.verifalia_service import VerifaliaService
 
@@ -37,7 +40,23 @@ RESULT_COLUMNS = [
     "candidate_confidence",
     "candidate_source_url",
     "candidate_rationale",
+    "verdict",
+    "verdict_reason",
 ]
+
+NOT_PROCESSED_LABEL = "Not processed"
+NOT_PROCESSED = object()
+RETRY_RESULTS = {"", "No email found", NOT_PROCESSED_LABEL}
+
+
+@dataclass
+class _Table:
+    frame: pd.DataFrame
+    email_column: object | None
+    previous: dict[str, object]
+    done: set[int]
+    names: list[tuple[str, str]]
+    direct_emails: list[str]
 
 
 class BatchService:
@@ -47,11 +66,13 @@ class BatchService:
         repository: BatchRepository,
         openrouter: OpenRouterService,
         verifalia: VerifaliaService,
+        evidence: EvidenceService | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
         self._openrouter = openrouter
         self._verifalia = verifalia
+        self._evidence = evidence
 
     async def process(
         self,
@@ -61,15 +82,122 @@ class BatchService:
         quality: Quality,
         generate_missing: bool,
         context: str,
+        on_progress: Callable[[dict[str, object]], None] | None = None,
     ) -> BatchResponse:
+        table = self._prepare(content, filename, generate_missing)
+        candidate_map: dict[str, list[Candidate]] = {}
+        verified: dict[str, VerificationResult] = {}
+
+        def report() -> None:
+            if on_progress is not None:
+                on_progress(self._checkpoint(candidate_map, verified))
+
+        async def verify(emails: list[str]) -> None:
+            pending = list(
+                dict.fromkeys(email for email in emails if email not in verified)
+            )
+            size = self._settings.verifalia_chunk_size
+            for offset in range(0, len(pending), size):
+                verified.update(
+                    await self._verifalia.verify_many(
+                        pending[offset : offset + size], quality
+                    )
+                )
+                report()
+
+        await verify(table.direct_emails)
+        names = dict(table.names)
+        size = self._settings.lookup_chunk_size_for(model.value)
+        for offset in range(0, len(table.names), size):
+            found = await self._openrouter.find_candidates(
+                table.names[offset : offset + size], model, context
+            )
+            if self._evidence is not None:
+                rows = list(found)
+                assessed = await self._evidence.assess_many(
+                    context, [(names.get(row, ""), found[row]) for row in rows]
+                )
+                found = dict(zip(rows, assessed))
+            candidate_map.update(found)
+            report()
+            await verify(
+                [
+                    candidate.email
+                    for items in found.values()
+                    for candidate in items
+                    if candidate.verdict != REJECTED
+                ]
+            )
+
+        response, _ = self._build(table, filename, candidate_map, verified)
+        return response
+
+    def partial(
+        self,
+        content: bytes,
+        filename: str,
+        generate_missing: bool,
+        checkpoint: dict[str, object],
+    ) -> tuple[BatchResponse, list[int]]:
+        table = self._prepare(content, filename, generate_missing)
+        candidates = checkpoint.get("candidates") or {}
+        results = checkpoint.get("verified") or {}
+        candidate_map = {
+            str(position): [Candidate(**item) for item in items]
+            for position, items in candidates.items()
+        }
+        verified = {
+            str(email): VerificationResult(**item) for email, item in results.items()
+        }
+        return self._build(table, filename, candidate_map, verified)
+
+    @staticmethod
+    def has_progress(checkpoint: dict[str, object] | None) -> bool:
+        return bool(
+            checkpoint and (checkpoint.get("candidates") or checkpoint.get("verified"))
+        )
+
+    @staticmethod
+    def describe_rows(rows: list[int], limit: int = 20) -> str:
+        ranges: list[str] = []
+        for row in rows:
+            if ranges and ranges[-1].split("-")[-1] == str(row - 1):
+                ranges[-1] = ranges[-1].split("-")[0] + f"-{row}"
+            else:
+                ranges.append(str(row))
+        text = ", ".join(ranges[:limit])
+        if len(ranges) > limit:
+            text += f" and {len(ranges) - limit} more ranges"
+        return text
+
+    @staticmethod
+    def _checkpoint(
+        candidate_map: dict[str, list[Candidate]],
+        verified: dict[str, VerificationResult],
+    ) -> dict[str, object]:
+        return {
+            "candidates": {
+                position: [item.model_dump(mode="json") for item in items]
+                for position, items in candidate_map.items()
+            },
+            "verified": {
+                email: result.model_dump(mode="json")
+                for email, result in verified.items()
+            },
+        }
+
+    def _prepare(self, content: bytes, filename: str, generate_missing: bool) -> _Table:
         frame = self._read_file(content, filename)
+        previous: dict[str, object] = {}
         # Preserve input result columns when a user checks a previously exported workbook.
         for column in list(frame.columns):
-            if str(column).strip().lower() in RESULT_COLUMNS:
+            key = str(column).strip().lower()
+            if key in RESULT_COLUMNS:
                 replacement = f"input_{column}"
                 while replacement in frame.columns:
                     replacement = "input_" + replacement
                 frame = frame.rename(columns={column: replacement})
+                previous[key] = replacement
         if len(frame) > self._settings.max_batch_rows:
             raise ServiceError(
                 f"Files can contain up to {self._settings.max_batch_rows:,} rows.",
@@ -84,63 +212,127 @@ class BatchService:
                 status_code=422,
             )
 
-        candidate_map: dict[str, list[Candidate]] = {}
-        names_to_find: list[tuple[str, str]] = []
-        if generate_missing and name_column is not None:
-            for position, (_, row) in enumerate(frame.iterrows()):
-                has_email = bool(
-                    email_column is not None and self._clean_cell(row.get(email_column))
-                )
-                name = self._clean_cell(row.get(name_column))
-                if not has_email and name:
-                    names_to_find.append((str(position), name))
-
-        for offset in range(0, len(names_to_find), 25):
-            chunk = names_to_find[offset : offset + 25]
-            candidate_map.update(
-                await self._openrouter.find_candidates(chunk, model, context)
+        done: set[int] = set()
+        names: list[tuple[str, str]] = []
+        direct_emails: list[str] = []
+        for position, (_, row) in enumerate(frame.iterrows()):
+            if (
+                "result" in previous
+                and self._clean_cell(row.get(previous["result"])) not in RETRY_RESULTS
+            ):
+                done.add(position)
+                continue
+            emails = (
+                self._split_emails(row.get(email_column))
+                if email_column is not None
+                else []
             )
+            direct_emails.extend(emails)
+            name = (
+                self._clean_cell(row.get(name_column))
+                if name_column is not None
+                else ""
+            )
+            if generate_missing and not emails and name:
+                names.append((str(position), name))
+        return _Table(
+            frame,
+            email_column,
+            previous,
+            done,
+            names,
+            list(dict.fromkeys(direct_emails)),
+        )
 
-        expanded: list[tuple[dict[str, object], str, Candidate | None]] = []
+    def _build(
+        self,
+        table: _Table,
+        filename: str,
+        candidate_map: dict[str, list[Candidate]],
+        verified: dict[str, VerificationResult],
+    ) -> tuple[BatchResponse, list[int]]:
+        frame, email_column = table.frame, table.email_column
+        output_rows: list[dict[str, object]] = []
+        unprocessed: list[int] = []
         generated_count = 0
+        lookup_rows = {row_id for row_id, _ in table.names}
         for position, (_, source_row) in enumerate(frame.iterrows()):
             original = {
                 column: self._json_value(source_row.get(column))
                 for column in frame.columns
             }
+            if position in table.done:
+                original["email"] = (
+                    self._clean_cell(source_row.get(email_column))
+                    if email_column is not None
+                    else ""
+                )
+                for column in RESULT_COLUMNS:
+                    original[column] = original.get(table.previous.get(column), "")
+                output_rows.append(original)
+                continue
             raw_emails = (
                 self._split_emails(source_row.get(email_column))
                 if email_column is not None
                 else []
             )
             if raw_emails:
-                for email in raw_emails:
-                    expanded.append((original.copy(), email, None))
-                continue
-            candidates = candidate_map.get(str(position), [])
-            if candidates:
-                for candidate in candidates:
-                    generated_count += 1
-                    expanded.append((original.copy(), candidate.email, candidate))
+                pairs = [(email, None) for email in raw_emails]
+            elif str(position) in candidate_map:
+                pairs = [
+                    (candidate.email, candidate)
+                    for candidate in candidate_map[str(position)]
+                ] or [("", None)]
+                generated_count += sum(1 for _, candidate in pairs if candidate)
+            elif str(position) in lookup_rows:
+                pairs = [("", NOT_PROCESSED)]
             else:
-                expanded.append((original.copy(), "", None))
+                pairs = [("", None)]
+            row_missing = False
+            for email, candidate in pairs:
+                row = original.copy()
+                row["email"] = email
+                if isinstance(candidate, Candidate) and candidate.verdict == REJECTED:
+                    row.update(
+                        self._result_columns(
+                            VerificationResult(
+                                email=email,
+                                result="Unverified",
+                                classification="Unknown",
+                                status="SkippedRejected",
+                            ),
+                            candidate,
+                        )
+                    )
+                elif candidate is NOT_PROCESSED or (email and email not in verified):
+                    row_missing = True
+                    row.update(
+                        self._not_processed_columns(
+                            candidate if isinstance(candidate, Candidate) else None
+                        )
+                    )
+                else:
+                    row.update(
+                        self._result_columns(
+                            verified.get(email) if email else None, candidate
+                        )
+                    )
+                output_rows.append(row)
+            if row_missing:
+                unprocessed.append(position + 2)
 
-        emails = [email for _, email, _ in expanded if email]
-        verified = await self._verifalia.verify_many(emails, quality)
-        output_rows: list[dict[str, object]] = []
-        for original, email, candidate in expanded:
-            original["email"] = email
-            result = verified.get(email) if email else None
-            original.update(self._result_columns(result, candidate))
-            output_rows.append(original)
-
+        emails = [
+            str(row["email"])
+            for row in output_rows
+            if row["email"] and str(row["email"]) in verified
+        ]
         output_frame = pd.DataFrame(output_rows)
         output_bytes = self._write_excel(output_frame)
         source_stem = Path(filename).stem or "email-check"
         output_filename = f"{source_stem}-verified.xlsx"
         batch_id = self._repository.put(output_filename, output_bytes)
         counts = Counter(str(row["result"]) for row in output_rows)
-        return BatchResponse(
+        response = BatchResponse(
             batch_id=batch_id,
             filename=output_filename,
             preview=output_rows[:50],
@@ -153,6 +345,7 @@ class BatchService:
                 counts=dict(counts),
             ),
         )
+        return response, unprocessed
 
     def download(self, batch_id: str) -> tuple[str, bytes]:
         stored = self._repository.get(batch_id)
@@ -260,6 +453,8 @@ class BatchService:
                 "candidate_confidence": "",
                 "candidate_source_url": "",
                 "candidate_rationale": "",
+                "verdict": "",
+                "verdict_reason": "",
             }
         return {
             "result": result.result,
@@ -279,7 +474,27 @@ class BatchService:
             "candidate_confidence": candidate.confidence if candidate else "",
             "candidate_source_url": candidate.source_url or "" if candidate else "",
             "candidate_rationale": candidate.rationale or "" if candidate else "",
+            "verdict": candidate.verdict or "" if candidate else "",
+            "verdict_reason": candidate.verdict_reason or "" if candidate else "",
         }
+
+    @staticmethod
+    def _not_processed_columns(candidate: Candidate | None) -> dict[str, object]:
+        columns = BatchService._result_columns(None, candidate)
+        columns.update(
+            result=NOT_PROCESSED_LABEL,
+            verifalia_classification="",
+            verifalia_status="NotProcessed",
+        )
+        if candidate is not None:
+            columns.update(
+                candidate_confidence=candidate.confidence,
+                candidate_source_url=candidate.source_url or "",
+                candidate_rationale=candidate.rationale or "",
+                verdict=candidate.verdict or "",
+                verdict_reason=candidate.verdict_reason or "",
+            )
+        return columns
 
     @staticmethod
     def _write_excel(frame: pd.DataFrame) -> bytes:

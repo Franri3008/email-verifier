@@ -741,6 +741,53 @@ input::placeholder {
   color: var(--warn);
 }
 
+.result-card.rejected {
+  box-shadow: none;
+  background: var(--surface-2);
+}
+
+.result-card.rejected .result-main,
+.result-card.rejected .result-mark,
+.result-card.rejected .status-tab {
+  opacity: 0.55;
+}
+
+.verdict-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+
+.verdict-label {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.verdict-label.confirmed {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.verdict-label.likely {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.verdict-label.rejected {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.verdict-reason {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .result-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1217,4 +1264,14 @@ tr:last-child td {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.table-shell tr.rejected td {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.table-shell .verdict-line {
+  margin: 0;
+  white-space: nowrap;
 }

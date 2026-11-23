@@ -72,8 +72,10 @@ export function AdvancedPanel({
     }
   };
 
+  const partial = response?.outcome === "partial";
+
   const previewColumns = response
-    ? ["name", "email", "result", "verifalia_status"].filter((column) =>
+    ? ["name", "email", "result", "verifalia_status", "verdict"].filter((column) =>
         response.columns.includes(column),
       )
     : [];
@@ -165,19 +167,21 @@ export function AdvancedPanel({
           {loading ? <><span className="spinner" /> Processing list…</> : <>Run batch verification <span>→</span></>}
         </button>
         <p className="privacy-note">Jobs continue in the background. Private results expire after 24 hours.</p>
+        <p className="privacy-note">Re-uploading a file you downloaded here? Rows that already have a result are kept as they are and not checked again. Rows marked No email found or Not processed are checked again.</p>
       </form>
 
       {response && (
         <section className="batch-result">
           <div className="batch-result-head">
             <div>
-              <span className="eyebrow">Complete</span>
+              <span className="eyebrow">{partial ? "Partial" : "Complete"}</span>
               <h2>{response.summary.emails_checked} unique emails checked</h2>
             </div>
             <a className="download-button" href={api.downloadUrl(response.batch_id)} download={response.filename}>
-              <DownloadIcon /> Download Excel
+              <DownloadIcon /> {partial ? "Download finished rows" : "Download Excel"}
             </a>
           </div>
+          {partial && <div className="error-banner" role="status">{response.message}</div>}
           <div className="stat-grid">
             {Object.entries(response.summary.counts).map(([label, count]) => (
               <div className="stat" key={label}><strong>{count}</strong><span>{label}</span></div>
@@ -189,7 +193,13 @@ export function AdvancedPanel({
                 <thead><tr>{previewColumns.map((column) => <th key={column}>{column.replaceAll("_", " ")}</th>)}</tr></thead>
                 <tbody>
                   {response.preview.slice(0, 8).map((row, index) => (
-                    <tr key={index}>{previewColumns.map((column) => <td key={column}>{String(row[column] ?? "")}</td>)}</tr>
+                    <tr key={index} className={verdictOf(row) === "rejected" ? "rejected" : undefined}>
+                      {previewColumns.map((column) => (
+                        <td key={column}>
+                          {column === "verdict" ? <VerdictCell row={row} /> : String(row[column] ?? "")}
+                        </td>
+                      ))}
+                    </tr>
                   ))}
                 </tbody>
               </table>
@@ -199,5 +209,21 @@ export function AdvancedPanel({
         </section>
       )}
     </div>
+  );
+}
+
+function verdictOf(row: Record<string, unknown>) {
+  return String(row.verdict ?? "").toLowerCase();
+}
+
+function VerdictCell({ row }: { row: Record<string, unknown> }) {
+  const verdict = String(row.verdict ?? "");
+  if (!verdict) return null;
+  const reason = String(row.verdict_reason ?? "");
+  return (
+    <span className="verdict-line">
+      <span className={`verdict-label ${verdict.toLowerCase()}`}>{verdict}</span>
+      {reason && <span className="verdict-reason">{reason}</span>}
+    </span>
   );
 }
