@@ -18,10 +18,11 @@ import type { Health, Mode, ModelOption, SimpleResponse, Usage } from "@/types/a
 
 
 const FALLBACK_MODELS: ModelOption[] = [
-  { id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna", note: "Fastest — best for batches" },
+  { id: "openai/gpt-6-luna", label: "GPT-6 Luna", note: "Fastest — best for batches" },
   { id: "openai/gpt-5.6-terra", label: "GPT-5.6 Terra", note: "Balanced research" },
-  { id: "anthropic/claude-sonnet-5", label: "Claude Sonnet 5", note: "Strong web synthesis" },
-  { id: "anthropic/claude-opus-5", label: "Claude Opus 5", note: "Highest quality, slower" },
+  { id: "anthropic/claude-haiku-5.5", label: "Claude Haiku 5.5", note: "Fast and cheap Claude" },
+  { id: "anthropic/claude-sonnet-5.5", label: "Claude Sonnet 5.5", note: "Strong web synthesis" },
+  { id: "anthropic/claude-opus-5.5", label: "Claude Opus 5.5", note: "Highest quality, slower" },
 ];
 
 const credits = (value: number) =>
@@ -236,6 +237,7 @@ function Checker() {
           />
         )}
       </main>
+      <span className="app-version">v{process.env.NEXT_PUBLIC_APP_VERSION}</span>
     </div>
   );
 }

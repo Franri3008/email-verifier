@@ -11,7 +11,7 @@ ROOT_DIR = BACKEND_DIR.parent
 
 class Settings(BaseSettings):
     app_name: str = "Email Checker"
-    app_version: str = "1.0.0"
+    app_version: str = "1.1.0"
     log_level: str = "INFO"
     database_url: str = "sqlite:///./email_checker.db"
     encryption_key: str = ""

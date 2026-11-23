@@ -130,6 +130,15 @@ select:focus-visible,
   min-height: 0;
 }
 
+.app-version {
+  position: fixed;
+  bottom: 10px;
+  left: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
 .usage-panel {
   display: flex;
   gap: 26px;

@@ -12,10 +12,11 @@ def test_models_lists_requested_choices(signed_in) -> None:
 
     assert response.status_code == 200
     assert [model["label"] for model in response.json()] == [
-        "GPT-5.6 Luna",
+        "GPT-6 Luna",
         "GPT-5.6 Terra",
-        "Claude Sonnet 5",
-        "Claude Opus 5",
+        "Claude Haiku 5.5",
+        "Claude Sonnet 5.5",
+        "Claude Opus 5.5",
     ]
 
 

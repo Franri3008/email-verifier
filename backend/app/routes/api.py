@@ -44,10 +44,11 @@ def models(user=Depends(authenticate)):
     return [
         dict(id=key.value, label=label, note="")
         for key, label in [
-            (ModelId.GPT_LUNA, "GPT-5.6 Luna"),
+            (ModelId.GPT_LUNA, "GPT-6 Luna"),
             (ModelId.GPT_TERRA, "GPT-5.6 Terra"),
-            (ModelId.CLAUDE_SONNET, "Claude Sonnet 5"),
-            (ModelId.CLAUDE_OPUS, "Claude Opus 5"),
+            (ModelId.CLAUDE_HAIKU, "Claude Haiku 5.5"),
+            (ModelId.CLAUDE_SONNET, "Claude Sonnet 5.5"),
+            (ModelId.CLAUDE_OPUS, "Claude Opus 5.5"),
         ]
     ]
 

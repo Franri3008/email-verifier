@@ -5,9 +5,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class ModelId(StrEnum):
     GPT_TERRA = "openai/gpt-5.6-terra"
-    GPT_LUNA = "openai/gpt-5.6-luna"
-    CLAUDE_SONNET = "anthropic/claude-sonnet-5"
-    CLAUDE_OPUS = "anthropic/claude-opus-5"
+    GPT_LUNA = "openai/gpt-6-luna"
+    CLAUDE_HAIKU = "anthropic/claude-haiku-5.5"
+    CLAUDE_SONNET = "anthropic/claude-sonnet-5.5"
+    CLAUDE_OPUS = "anthropic/claude-opus-5.5"
 
 
 class Quality(StrEnum):
